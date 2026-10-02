@@ -6,5 +6,6 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = XiangqiAssist
 XiangqiAssist_FILES = Tweak.x
+XiangqiAssist_PLIST = XiangqiAssist.plist
 
 include $(THEOS_MAKE_PATH)/tweak.mk
