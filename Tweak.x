@@ -4,6 +4,7 @@
 static BOOL started = NO;
 static NSTimer *scanTimer = nil;
 
+// ---- 写日志 ----
 static void writeLog(NSString *msg) {
     NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/xiangqi_log.txt"];
     NSString *line = [NSString stringWithFormat:@"%@\n", msg];
@@ -17,6 +18,7 @@ static void writeLog(NSString *msg) {
     }
 }
 
+// ---- 获取当前窗口（兼容 iOS 13+ Scene 写法）----
 static UIWindow *getKeyWindow(void) {
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
@@ -28,6 +30,7 @@ static UIWindow *getKeyWindow(void) {
     return nil;
 }
 
+// ---- 截图 ----
 static UIImage *captureScreen(void) {
     UIWindow *window = getKeyWindow();
     if (!window) return nil;
@@ -39,6 +42,7 @@ static UIImage *captureScreen(void) {
     return image;
 }
 
+// ---- 扫描棋盘：裁剪 + 放大 + OCR ----
 static void scanBoard(void) {
     UIImage *image = captureScreen();
     if (!image || !image.CGImage) {
@@ -46,7 +50,44 @@ static void scanBoard(void) {
         return;
     }
     
-    VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:image.CGImage options:@{}];
+    CGFloat imgW = image.size.width;
+    CGFloat imgH = image.size.height;
+    CGFloat scale = image.scale;
+    
+    // 棋盘区域：x=3%, y=27%, 宽=94%, 高=47%
+    CGRect cropRect = CGRectMake(imgW * 0.03,
+                                 imgH * 0.27,
+                                 imgW * 0.94,
+                                 imgH * 0.47);
+    
+    // 换算成像素坐标，裁剪
+    CGRect pixelRect = CGRectMake(cropRect.origin.x * scale,
+                                  cropRect.origin.y * scale,
+                                  cropRect.size.width * scale,
+                                  cropRect.size.height * scale);
+    CGImageRef cropped = CGImageCreateWithImageInRect(image.CGImage, pixelRect);
+    if (!cropped) {
+        writeLog(@"裁剪失败");
+        return;
+    }
+    
+    // 放大 3 倍
+    CGFloat newW = cropRect.size.width * 3;
+    CGFloat newH = cropRect.size.height * 3;
+    UIGraphicsBeginImageContextWithOptions(CGSizeMake(newW, newH), NO, 1.0);
+    UIImage *croppedImage = [UIImage imageWithCGImage:cropped];
+    [croppedImage drawInRect:CGRectMake(0, 0, newW, newH)];
+    UIImage *enlarged = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    CGImageRelease(cropped);
+    
+    if (!enlarged.CGImage) {
+        writeLog(@"放大失败");
+        return;
+    }
+    
+    // OCR
+    VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:enlarged.CGImage options:@{}];
     VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] initWithCompletionHandler:^(VNRequest *req, NSError *error) {
         if (error) { writeLog(@"OCR 错误"); return; }
         
@@ -77,11 +118,13 @@ static void scanBoard(void) {
     
     request.recognitionLanguages = @[@"zh-Hans"];
     request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
+    request.usesLanguageCorrection = NO;
     
     NSError *err = nil;
     [handler performRequests:@[request] error:&err];
 }
 
+// ---- 入口：进入 App 后 5 秒开始自动扫描，每 2 秒一次 ----
 %hook UIViewController
 
 - (void)viewDidAppear:(BOOL)animated {
