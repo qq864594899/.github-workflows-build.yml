@@ -2,9 +2,9 @@
 
 static BOOL hasShownAlert = NO;
 
-// ---- 日志工具：写到文件，用 Filza 就能看 ----
+// ---- 日志工具：写到 App 自己的沙盒目录，不需要任何特殊权限 ----
 static void writeLog(NSString *msg) {
-    NSString *path = @"/var/mobile/Documents/xiangqi_log.txt";
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/xiangqi_log.txt"];
     NSString *line = [NSString stringWithFormat:@"%@\n", msg];
     NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
     if (!fh) {
@@ -36,12 +36,12 @@ static void dumpView(UIView *view, NSInteger level) {
         hasShownAlert = YES;
         
         dispatch_async(dispatch_get_main_queue(), ^{
-            // 1. 写日志：打印视图层级
+            // 1. 写日志
             writeLog(@"=== 开始打印视图层级 ===");
             dumpView(self.view, 0);
             writeLog(@"=== 打印结束 ===");
             
-            // 2. 弹窗：确认注入成功
+            // 2. 弹窗确认注入
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"XiangqiAssist"
                                                                            message:@"注入成功"
                                                                     preferredStyle:UIAlertControllerStyleAlert];
