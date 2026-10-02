@@ -7,13 +7,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
       - name: Setup Theos
         run: |
-          git clone --recursive https://github.com/theos/theos.git $HOME/theos
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
-          echo "$HOME/theos/bin" >> $GITHUB_PATH
+          git clone --recursive https://github.com/theos/theos.git /home/runner/theos
+          echo "THEOS=/home/runner/theos" >> $GITHUB_ENV
+          echo "/home/runner/theos/bin" >> $GITHUB_PATH
+          
       - name: Build
         run: make package THEOS_PACKAGE_SCHEME=rootless
+        env:
+          THEOS: /home/runner/theos
+          
       - name: Upload deb
         uses: actions/upload-artifact@v4
         with:
