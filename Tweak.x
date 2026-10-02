@@ -16,7 +16,7 @@ static void writeLog(NSString *msg) {
     }
 }
 
-// ---- 递归打印视图层级：独立函数，不放在 %hook 里 ----
+// ---- 递归打印视图层级 ----
 static void dumpView(UIView *view, NSInteger level) {
     NSMutableString *indent = [NSMutableString string];
     for (NSInteger i = 0; i < level; i++) [indent appendString:@"  "];
@@ -36,9 +36,17 @@ static void dumpView(UIView *view, NSInteger level) {
         hasShownAlert = YES;
         
         dispatch_async(dispatch_get_main_queue(), ^{
+            // 1. 写日志：打印视图层级
             writeLog(@"=== 开始打印视图层级 ===");
             dumpView(self.view, 0);
             writeLog(@"=== 打印结束 ===");
+            
+            // 2. 弹窗：确认注入成功
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"XiangqiAssist"
+                                                                           message:@"注入成功"
+                                                                    preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+            [self presentViewController:alert animated:YES completion:nil];
         });
     }
 }
