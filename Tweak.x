@@ -2,29 +2,14 @@
 
 static BOOL hasShownAlert = NO;
 
-// ---- 日志工具：写到 App 自己的沙盒目录，不需要任何特殊权限 ----
-static void writeLog(NSString *msg) {
-    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/xiangqi_log.txt"];
-    NSString *line = [NSString stringWithFormat:@"%@\n", msg];
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
-    if (!fh) {
-        [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    } else {
-        [fh seekToEndOfFile];
-        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
-        [fh closeFile];
-    }
-}
-
-// ---- 递归打印视图层级 ----
-static void dumpView(UIView *view, NSInteger level) {
-    NSMutableString *indent = [NSMutableString string];
-    for (NSInteger i = 0; i < level; i++) [indent appendString:@"  "];
-    NSString *line = [NSString stringWithFormat:@"%@%@ frame=%@", indent, NSStringFromClass([view class]), NSStringFromCGRect(view.frame)];
-    writeLog(line);
-    for (UIView *sub in view.subviews) {
-        dumpView(sub, level + 1);
-    }
+static void saveScreenshot(UIView *view, NSString *name) {
+    UIGraphicsBeginImageContextWithOptions(view.bounds.size, NO, 0);
+    [view drawViewHierarchyInRect:view.bounds afterScreenUpdates:YES];
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"Documents/%@.png", name]];
+    [UIImagePNGRepresentation(image) writeToFile:path atomically:YES];
 }
 
 %hook UIViewController
@@ -36,17 +21,10 @@ static void dumpView(UIView *view, NSInteger level) {
         hasShownAlert = YES;
         
         dispatch_async(dispatch_get_main_queue(), ^{
-            // 1. 写日志
-            writeLog(@"=== 开始打印视图层级 ===");
-            dumpView(self.view, 0);
-            writeLog(@"=== 打印结束 ===");
-            
-            // 2. 弹窗确认注入
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"XiangqiAssist"
-                                                                           message:@"注入成功"
-                                                                    preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-            [self presentViewController:alert animated:YES completion:nil];
+            // 延迟 3 秒，等画面完全渲染
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                saveScreenshot(self.view, @"xiangqi_screen");
+            });
         });
     }
 }
