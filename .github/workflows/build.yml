@@ -18,12 +18,11 @@ jobs:
 
       - name: Setup Toolchain
         run: |
-          git clone --depth 1 https://github.com/theos/toolchain.git /home/runner/theos/toolchain
-          echo "THEOS_TOOLCHAIN=/home/runner/theos/toolchain" >> $GITHUB_ENV
-      - name: Build
-        run: make package THEOS_PACKAGE_SCHEME=rootless
-        env:
-          THEOS: /home/runner/theos
+          mkdir -p /home/runner/theos/toolchain/linux/iphone
+          cd /home/runner/theos/toolchain/linux/iphone
+          wget -q https://github.com/L1ghtmann/ios-toolchain/releases/download/12.5/ios-toolchain.tar.xz
+          tar -xf ios-toolchain.tar.xz
+          rm ios-toolchain.tar.xz
           
       - name: Upload deb
         uses: actions/upload-artifact@v4
