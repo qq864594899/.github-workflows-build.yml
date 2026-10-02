@@ -3,21 +3,26 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache Theos
+        uses: actions/cache@v4
+        with:
+          path: ~/theos
+          key: ${{ runner.os }}-theos-v1
+
       - name: Setup Theos
         uses: Randomblock1/theos-action@v1
 
       - name: Build
-        run: make
+        run: make package THEOS_PACKAGE_SCHEME=rootless
 
-      - name: Upload dylib
+      - name: Upload deb
         uses: actions/upload-artifact@v4
         with:
-          name: tweak-dylib
-          path: .theos/obj/**/*.dylib
+          name: tweak-deb
+          path: packages/*.deb
