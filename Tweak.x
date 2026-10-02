@@ -1,7 +1,9 @@
 #import <UIKit/UIKit.h>
 
 static BOOL hasShownAlert = NO;
+static NSInteger screenshotCounter = 0;
 
+// ---- 截图并保存 ----
 static void saveScreenshot(UIView *view, NSString *name) {
     UIGraphicsBeginImageContextWithOptions(view.bounds.size, NO, 0);
     [view drawViewHierarchyInRect:view.bounds afterScreenUpdates:YES];
@@ -21,10 +23,26 @@ static void saveScreenshot(UIView *view, NSString *name) {
         hasShownAlert = YES;
         
         dispatch_async(dispatch_get_main_queue(), ^{
-            // 延迟 3 秒，等画面完全渲染
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                saveScreenshot(self.view, @"xiangqi_screen");
-            });
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"XiangqiAssist"
+                                                                           message:@"点按钮开始截图"
+                                                                    preferredStyle:UIAlertControllerStyleAlert];
+            
+            [alert addAction:[UIAlertAction actionWithTitle:@"开始截图" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                screenshotCounter++;
+                NSString *name = [NSString stringWithFormat:@"screen_%ld", (long)screenshotCounter];
+                saveScreenshot(self.view, name);
+                
+                // 再弹一个确认
+                UIAlertController *done = [UIAlertController alertControllerWithTitle:@"已截图"
+                                                                              message:[NSString stringWithFormat:@"保存为 %@.png", name]
+                                                                       preferredStyle:UIAlertControllerStyleAlert];
+                [done addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+                [self presentViewController:done animated:YES completion:nil];
+            }]];
+            
+            [alert addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleCancel handler:nil]];
+            
+            [self presentViewController:alert animated:YES completion:nil];
         });
     }
 }
