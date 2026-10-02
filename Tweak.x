@@ -2,6 +2,7 @@
 
 static BOOL hasShownAlert = NO;
 
+// ---- 日志工具：写到文件，用 Filza 就能看 ----
 static void writeLog(NSString *msg) {
     NSString *path = @"/var/mobile/Documents/xiangqi_log.txt";
     NSString *line = [NSString stringWithFormat:@"%@\n", msg];
@@ -15,6 +16,17 @@ static void writeLog(NSString *msg) {
     }
 }
 
+// ---- 递归打印视图层级：独立函数，不放在 %hook 里 ----
+static void dumpView(UIView *view, NSInteger level) {
+    NSMutableString *indent = [NSMutableString string];
+    for (NSInteger i = 0; i < level; i++) [indent appendString:@"  "];
+    NSString *line = [NSString stringWithFormat:@"%@%@ frame=%@", indent, NSStringFromClass([view class]), NSStringFromCGRect(view.frame)];
+    writeLog(line);
+    for (UIView *sub in view.subviews) {
+        dumpView(sub, level + 1);
+    }
+}
+
 %hook UIViewController
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -25,18 +37,9 @@ static void writeLog(NSString *msg) {
         
         dispatch_async(dispatch_get_main_queue(), ^{
             writeLog(@"=== 开始打印视图层级 ===");
-            [self dumpView:self.view level:0];
+            dumpView(self.view, 0);
+            writeLog(@"=== 打印结束 ===");
         });
-    }
-}
-
-- (void)dumpView:(UIView *)view level:(NSInteger)level {
-    NSMutableString *indent = [NSMutableString string];
-    for (NSInteger i = 0; i < level; i++) [indent appendString:@"  "];
-    NSString *line = [NSString stringWithFormat:@"%@%@ frame=%@", indent, NSStringFromClass([view class]), NSStringFromCGRect(view.frame)];
-    writeLog(line);
-    for (UIView *sub in view.subviews) {
-        [self dumpView:sub level:level + 1];
     }
 }
 
