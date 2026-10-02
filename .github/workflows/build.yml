@@ -18,11 +18,13 @@ jobs:
 
       - name: Setup Toolchain
         run: |
+          set -x
           mkdir -p /home/runner/theos/toolchain/linux/iphone
           cd /home/runner/theos/toolchain/linux/iphone
-          wget -q https://github.com/L1ghtmann/ios-toolchain/releases/download/12.5/ios-toolchain.tar.xz
+          curl -L -o ios-toolchain.tar.xz https://github.com/L1ghtmann/ios-toolchain/releases/download/12.5/ios-toolchain.tar.xz
+          ls -la
           tar -xf ios-toolchain.tar.xz
-          rm ios-toolchain.tar.xz
+          rm -f ios-toolchain.tar.xz
           echo "=== 检查 clang 位置: ==="
           find . -name "clang" -type f
 
