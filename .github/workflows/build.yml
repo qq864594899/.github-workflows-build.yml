@@ -9,42 +9,13 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Setup Theos
-        run: |
-          git clone --recursive https://github.com/theos/theos.git /home/runner/theos
-          echo "THEOS=/home/runner/theos" >> $GITHUB_ENV
-          echo "/home/runner/theos/bin" >> $GITHUB_PATH
-          rm -rf /home/runner/theos/sdks
-          git clone --depth 1 https://github.com/theos/sdks.git /home/runner/theos/sdks
-
-      - name: Setup Toolchain
-        run: |
-          set -x
-          mkdir -p /home/runner/theos/toolchain/linux/iphone
-          cd /home/runner/theos/toolchain/linux/iphone
-          
-          # 尝试从多个源下载工具链
-          curl -L -o ios-toolchain.tar.xz https://github.com/L1ghtmann/ios-toolchain/releases/download/12.5/ios-toolchain.tar.xz || \
-          curl -L -o ios-toolchain.tar.xz https://github.com/theos/toolchain/releases/download/v1.0/ios-toolchain.tar.xz || \
-          curl -L -o ios-toolchain.tar.xz https://github.com/sbingner/llvm-project/releases/download/v10.0.0-1/linux-ios-arm64e-clang-toolchain.tar.lzma
-          
-          ls -la
-          file ios-toolchain.tar.xz
-          
-          # 根据文件类型解压
-          if file ios-toolchain.tar.xz | grep -q "XZ"; then
-            tar -xf ios-toolchain.tar.xz
-          elif file ios-toolchain.tar.xz | grep -q "LZMA"; then
-            tar --lzma -xf ios-toolchain.tar.xz
-          fi
-          
-          rm -f ios-toolchain.tar.xz
-          echo "=== 检查 clang 位置: ==="
-          find . -name "clang" -type f 2>/dev/null || echo "clang 未找到"
+        uses: Randomblock1/theos-action@v1
+      
       - name: Build
         run: make package THEOS_PACKAGE_SCHEME=rootless
         env:
-          THEOS: /home/runner/theos
-
+          THEOS: /home/runner/work/theos
+      
       - name: Upload deb
         uses: actions/upload-artifact@v4
         with:
