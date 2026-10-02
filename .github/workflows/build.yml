@@ -15,7 +15,11 @@ jobs:
           echo "/home/runner/theos/bin" >> $GITHUB_PATH
           rm -rf /home/runner/theos/sdks
           git clone --depth 1 https://github.com/theos/sdks.git /home/runner/theos/sdks
-          
+
+      - name: Setup Toolchain
+        run: |
+          git clone --depth 1 https://github.com/theos/toolchain.git /home/runner/theos/toolchain
+          echo "THEOS_TOOLCHAIN=/home/runner/theos/toolchain" >> $GITHUB_ENV
       - name: Build
         run: make package THEOS_PACKAGE_SCHEME=rootless
         env:
