@@ -3,22 +3,51 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-
-      - name: Cache Theos
-        uses: actions/cache@v4
-        with:
-          path: ~/theos
-          key: ${{ runner.os }}-theos-v1
 
       - name: Setup Theos
         uses: Randomblock1/theos-action@v1
 
-      - name: Build
+      - name: Clone Pikafish
+        run: |
+          git clone --depth 1 https://github.com/official-pikafish/Pikafish.git /tmp/Pikafish
+          ls /tmp/Pikafish/src/ | head -20
+
+      - name: Download NNUE
+        run: |
+          curl -L -o /tmp/Pikafish/src/pikafish.nnue \
+            https://github.com/official-pikafish/Pikafish/raw/master/src/pikafish.nnue
+          ls -la /tmp/Pikafish/src/pikafish.nnue
+
+      - name: Patch Pikafish Makefile
+        run: |
+          cd /tmp/Pikafish/src
+          sed -i.bak 's/CXX = g++/CXX = clang++/' Makefile || true
+          sed -i.bak 's/CXX=g++/CXX=clang++/' Makefile || true
+          grep -n "CXX" Makefile | head -5
+
+      - name: Build Pikafish static library
+        run: |
+          cd /tmp/Pikafish/src
+          make -j4 build ARCH=apple-silicon COMP=clang
+          ls -la *.o | wc -l
+          ar rcs libpikafish.a *.o
+          ls -la libpikafish.a
+
+      - name: Copy libs
+        run: |
+          mkdir -p libs
+          cp /tmp/Pikafish/src/libpikafish.a libs/
+          cp /tmp/Pikafish/src/pikafish.nnue libs/
+          cp /tmp/Pikafish/src/*.h libs/
+          ls -la libs/ | head -30
+
+      - name: Build Tweak
         run: make package THEOS_PACKAGE_SCHEME=rootless
 
       - name: Upload deb
