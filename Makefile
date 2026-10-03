@@ -7,6 +7,8 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = XiangqiAssist
 XiangqiAssist_FILES = Tweak.x
 XiangqiAssist_PLIST = XiangqiAssist.plist
-XiangqiAssist_FRAMEWORKS = UIKit Vision CoreML
+XiangqiAssist_FRAMEWORKS = UIKit CoreML
+XiangqiAssist_CFLAGS = -Ilibs -std=c++17
+XiangqiAssist_LDFLAGS = -Llibs -lpikafish -lc++
 
 include $(THEOS_MAKE_PATH)/tweak.mk
