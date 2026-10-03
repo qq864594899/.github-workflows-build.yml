@@ -1,14 +1,7 @@
 #import <UIKit/UIKit.h>
-#import <Vision/Vision.h>
 
-static NSTimer *scanTimer = nil;
-static BOOL isScanning = NO;
-static NSInteger snapshotCounter = 0;
-static UIView *panel = nil;
-static UILabel *resultLabel = nil;
-static UIButton *toggleBtn = nil;
+static NSInteger snapCounter = 0;
 
-// ---- 写日志 ----
 static void writeLog(NSString *msg) {
     NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/xiangqi_log.txt"];
     NSString *line = [NSString stringWithFormat:@"%@\n", msg];
@@ -22,21 +15,17 @@ static void writeLog(NSString *msg) {
     }
 }
 
-// ---- 获取窗口 ----
 static UIWindow *getAnyWindow(void) {
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if ([scene isKindOfClass:[UIWindowScene class]]) {
             NSArray *wins = ((UIWindowScene *)scene).windows;
-            for (UIWindow *w in wins) {
-                if (w.isKeyWindow) return w;
-            }
+            for (UIWindow *w in wins) if (w.isKeyWindow) return w;
             if (wins.count > 0) return wins.lastObject;
         }
     }
     return nil;
 }
 
-// ---- 截图 ----
 static UIImage *captureScreen(void) {
     UIWindow *window = getAnyWindow();
     if (!window) return nil;
@@ -47,165 +36,139 @@ static UIImage *captureScreen(void) {
     return image;
 }
 
-// ---- 扫描 ----
-static void scanBoard(void) {
+// ============ 切格子：9 列 × 10 行 ============
+static void sliceBoard(void) {
     UIImage *image = captureScreen();
-    if (!image || !image.CGImage) {
-        writeLog(@"截图失败");
-        return;
+    if (!image || !image.CGImage) { writeLog(@"截图失败"); return; }
+    
+    // 保存原始截图，便于核对
+    NSString *rawPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/raw_board.png"];
+    [UIImagePNGRepresentation(image) writeToFile:rawPath atomically:YES];
+    
+    CGFloat scale = image.scale;
+    CGFloat imgW = image.size.width * scale;
+    CGFloat imgH = image.size.height * scale;
+    writeLog([NSString stringWithFormat:@"截图尺寸: %.0f x %.0f", imgW, imgH]);
+    
+    // 棋盘区域（以第一颗棋子中心 48,48，最后一颗 660,715 为基准）
+    // 但注意：这个 48/48 是在 711×758 的坐标系里，需要按实际截图尺寸缩放
+    CGFloat baseX = 48.0 * (imgW / 711.0);
+    CGFloat baseY = 48.0 * (imgH / 758.0);
+    CGFloat stepX = 76.5 * (imgW / 711.0);
+    CGFloat stepY = 74.1 * (imgH / 758.0);
+    CGFloat cellSize = 80.0 * (imgW / 711.0);  // 每格裁 80 像素
+    
+    NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/cells"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    
+    for (int r = 0; r < 10; r++) {
+        for (int c = 0; c < 9; c++) {
+            CGFloat cx = baseX + c * stepX;
+            CGFloat cy = baseY + r * stepY;
+            
+            CGRect cellRect = CGRectMake(cx - cellSize/2, cy - cellSize/2, cellSize, cellSize);
+            CGImageRef cellImg = CGImageCreateWithImageInRect(image.CGImage, cellRect);
+            if (!cellImg) continue;
+            
+            // 放大 2 倍保存
+            CGFloat nw = cellSize * 2;
+            CGFloat nh = cellSize * 2;
+            UIGraphicsBeginImageContextWithOptions(CGSizeMake(nw, nh), NO, 1.0);
+            [[UIImage imageWithCGImage:cellImg] drawInRect:CGRectMake(0, 0, nw, nh)];
+            UIImage *big = UIGraphicsGetImageFromCurrentImageContext();
+            UIGraphicsEndImageContext();
+            CGImageRelease(cellImg);
+            
+            NSString *name = [NSString stringWithFormat:@"r%02d_c%02d.png", r, c];
+            NSString *path = [dir stringByAppendingPathComponent:name];
+            [UIImagePNGRepresentation(big) writeToFile:path atomically:YES];
+        }
     }
     
-    snapshotCounter++;
-    NSString *snapName = [NSString stringWithFormat:@"snap_%03ld.png", (long)snapshotCounter];
-    NSString *snapPath = [NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"Documents/%@", snapName]];
-    [UIImagePNGRepresentation(image) writeToFile:snapPath atomically:YES];
-    
-    CGFloat imgW = image.size.width;
-    CGFloat imgH = image.size.height;
-    CGFloat scale = image.scale;
-    
-    CGRect cropRect = CGRectMake(imgW * 0.03, imgH * 0.27, imgW * 0.94, imgH * 0.47);
-    CGRect pixelRect = CGRectMake(cropRect.origin.x * scale, cropRect.origin.y * scale,
-                                  cropRect.size.width * scale, cropRect.size.height * scale);
-    CGImageRef cropped = CGImageCreateWithImageInRect(image.CGImage, pixelRect);
-    if (!cropped) return;
-    
-    CGFloat newW = cropRect.size.width * 3;
-    CGFloat newH = cropRect.size.height * 3;
-    UIGraphicsBeginImageContextWithOptions(CGSizeMake(newW, newH), NO, 1.0);
-    [[UIImage imageWithCGImage:cropped] drawInRect:CGRectMake(0, 0, newW, newH)];
-    UIImage *enlarged = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    CGImageRelease(cropped);
-    if (!enlarged.CGImage) return;
-    
-    VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:enlarged.CGImage options:@{}];
-    VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] initWithCompletionHandler:^(VNRequest *req, NSError *error) {
-        if (error) return;
-        NSSet *pieceSet = [NSSet setWithArray:@[@"帅",@"将",@"仕",@"士",@"相",@"象",@"车",@"馬",@"马",@"炮",@"兵",@"卒"]];
-        NSMutableArray *pieces = [NSMutableArray array];
-        for (VNRecognizedTextObservation *obs in req.results) {
-            VNRecognizedText *top = [[obs topCandidates:1] firstObject];
-            if (!top) continue;
-            NSString *text = top.string;
-            if (text.length != 1) continue;
-            if (![pieceSet containsObject:text]) continue;
-            CGRect box = obs.boundingBox;
-            CGFloat cx = box.origin.x + box.size.width / 2;
-            CGFloat cy = box.origin.y + box.size.height / 2;
-            [pieces addObject:@{@"text": text, @"x": @(cx), @"y": @(1.0 - cy)}];
-        }
-        
-        NSMutableString *detail = [NSMutableString stringWithFormat:@"%lu 子: ", (unsigned long)pieces.count];
-        for (NSDictionary *p in pieces) {
-            [detail appendFormat:@"%@(%.2f,%.2f) ", p[@"text"], [p[@"x"] doubleValue], [p[@"y"] doubleValue]];
-        }
-        writeLog(detail);
-        
-        dispatch_async(dispatch_get_main_queue(), ^{
-            resultLabel.text = detail;
-        });
-    }];
-    request.recognitionLanguages = @[@"zh-Hans"];
-    request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
-    request.usesLanguageCorrection = NO;
-    [handler performRequests:@[request] error:nil];
+    snapCounter++;
+    writeLog([NSString stringWithFormat:@"切格子完成 #%ld，目录: Documents/cells/", (long)snapCounter]);
 }
+// ============================================
 
-// ---- 按钮点击：开始/停止 ----
-@interface PanelController : NSObject
-- (void)toggleScan:(UIButton *)sender;
+// ---- 悬浮窗 + 按钮 ----
+static UIView *panel = nil;
+static UILabel *infoLabel = nil;
+static UIButton *sliceBtn = nil;
+
+@interface SliceController : NSObject
+- (void)onSlice:(UIButton *)sender;
 - (void)handlePan:(UIPanGestureRecognizer *)gesture;
 @end
 
-@implementation PanelController
-
-- (void)toggleScan:(UIButton *)sender {
-    if (isScanning) {
-        [scanTimer invalidate];
-        scanTimer = nil;
-        isScanning = NO;
-        [sender setTitle:@"▶ 开始扫描" forState:UIControlStateNormal];
-    } else {
-        isScanning = YES;
-        [sender setTitle:@"⏸ 停止扫描" forState:UIControlStateNormal];
-        scanTimer = [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:YES block:^(NSTimer *t) {
-            scanBoard();
-        }];
-        scanBoard();
-    }
+@implementation SliceController
+- (void)onSlice:(UIButton *)sender {
+    [sender setTitle:@"切格子中..." forState:UIControlStateNormal];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        sliceBoard();
+        [sender setTitle:@"✅ 切格子完成" forState:UIControlStateNormal];
+        infoLabel.text = @"已存到 Documents/cells/";
+    });
 }
-
 - (void)handlePan:(UIPanGestureRecognizer *)gesture {
-    CGPoint translation = [gesture translationInView:gesture.view.superview];
-    gesture.view.center = CGPointMake(gesture.view.center.x + translation.x,
-                                      gesture.view.center.y + translation.y);
+    CGPoint t = [gesture translationInView:gesture.view.superview];
+    gesture.view.center = CGPointMake(gesture.view.center.x + t.x, gesture.view.center.y + t.y);
     [gesture setTranslation:CGPointZero inView:gesture.view.superview];
 }
-
 @end
 
-static PanelController *controller = nil;
+static SliceController *sliceCtl = nil;
 
-// ---- 创建悬浮窗 ----
 static void createPanel(void) {
     if (panel) return;
-    if (!controller) controller = [[PanelController alloc] init];
+    if (!sliceCtl) sliceCtl = [[SliceController alloc] init];
     
     UIWindow *window = getAnyWindow();
     if (!window) return;
     
-    CGFloat w = 300, h = 180;
+    CGFloat w = 280, h = 140;
     CGFloat x = window.bounds.size.width - w - 10;
-    CGFloat y = 100;
+    CGFloat y = 120;
     
     panel = [[UIView alloc] initWithFrame:CGRectMake(x, y, w, h)];
     panel.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.85];
     panel.layer.cornerRadius = 12;
-    panel.layer.borderColor = [UIColor whiteColor].CGColor;
-    panel.layer.borderWidth = 1;
     
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(10, 8, w - 20, 22)];
-    title.text = @"XiangqiAssist";
+    title.text = @"XiangqiAssist - 切格子";
     title.textColor = [UIColor whiteColor];
-    title.font = [UIFont boldSystemFontOfSize:15];
+    title.font = [UIFont boldSystemFontOfSize:14];
     [panel addSubview:title];
     
-    toggleBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    toggleBtn.frame = CGRectMake(10, 36, w - 20, 36);
-    [toggleBtn setTitle:@"▶ 开始扫描" forState:UIControlStateNormal];
-    [toggleBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    toggleBtn.backgroundColor = [UIColor systemBlueColor];
-    toggleBtn.layer.cornerRadius = 8;
-    [toggleBtn addTarget:controller action:@selector(toggleScan:) forControlEvents:UIControlEventTouchUpInside];
-    [panel addSubview:toggleBtn];
+    sliceBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    sliceBtn.frame = CGRectMake(10, 36, w - 20, 40);
+    [sliceBtn setTitle:@"切格子" forState:UIControlStateNormal];
+    [sliceBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    sliceBtn.backgroundColor = [UIColor systemBlueColor];
+    sliceBtn.layer.cornerRadius = 8;
+    [sliceBtn addTarget:sliceCtl action:@selector(onSlice:) forControlEvents:UIControlEventTouchUpInside];
+    [panel addSubview:sliceBtn];
     
-    resultLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 80, w - 20, h - 90)];
-    resultLabel.text = @"等待...";
-    resultLabel.textColor = [UIColor whiteColor];
-    resultLabel.font = [UIFont systemFontOfSize:10];
-    resultLabel.numberOfLines = 0;
-    [panel addSubview:resultLabel];
+    infoLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 84, w - 20, 40)];
+    infoLabel.text = @"先切到 2D 视角再点按钮";
+    infoLabel.textColor = [UIColor whiteColor];
+    infoLabel.font = [UIFont systemFontOfSize:11];
+    infoLabel.numberOfLines = 0;
+    [panel addSubview:infoLabel];
     
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:controller action:@selector(handlePan:)];
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:sliceCtl action:@selector(handlePan:)];
     [panel addGestureRecognizer:pan];
     
     [window addSubview:panel];
 }
 
-// ---- 入口 ----
 %hook UIViewController
-
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    
     static BOOL created = NO;
     if (created) return;
     created = YES;
-    
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         createPanel();
     });
 }
-
 %end
