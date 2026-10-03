@@ -167,7 +167,7 @@ static float iou(DetBox a, DetBox b) {
 }
 
 static int nms(DetBox *boxes, int count, float iouThresh, DetBox *out) {
-    int *used = (int *)calloc(count, sizeof(int));
+    int *used = calloc(count, sizeof(int));
     int outCount = 0;
     while (1) {
         int best = -1;
@@ -219,58 +219,19 @@ static void runInference(void) {
     MLFeatureValue *v = [output featureValueForName:output.featureNames.allObjects.firstObject];
     MLMultiArray *outArr = v.multiArrayValue;
     
-    DetBox *raw = (DetBox *)calloc(5000, sizeof(DetBox));
+    DetBox *raw = calloc(5000, sizeof(DetBox));
     int rawCount = 0;
     parseYOLO(outArr, 0.3, raw, &rawCount, 5000);
     
-    DetBox *nmsOut = (DetBox *)calloc(5000, sizeof(DetBox));
+    DetBox *nmsOut = calloc(5000, sizeof(DetBox));
     int nmsCount = nms(raw, rawCount, 0.6, nmsOut);
     writeLog([NSString stringWithFormat:@"NMS 后: %d", nmsCount]);
-    
-    // ===== 按类别分组打印（新增，用于确定映射）=====
-    for (int c = 0; c < 15; c++) {
-        NSMutableString *line = [NSMutableString stringWithFormat:@"类%d: ", c];
-        for (int i = 0; i < nmsCount; i++) {
-            if (nmsOut[i].cls == c) {
-                [line appendFormat:@"(%.0f,%.0f) ", nmsOut[i].cx, nmsOut[i].cy];
-            }
-        }
-        writeLog(line);
-    }
     
     // ===== 坐标映射 =====
     float bx0 = 37,  bx1 = 600;
     float by0 = 179, by1 = 459;
     
-    DetBox *finalBoxes = (DetBox *)calloc(5000, sizeof(DetBox));
-    int finalCount = 0;
-    for (int i = 0; i < nmsCount; i++) {
-        DetBox b = nmsOut[i];
-        float fx = (b.cx - bx0) / (bx1 - bx0);
-        float fy = (b.cy - by0) / (by1 - by0);
-        int col = (int)roundf(fx * 8);
-        int row = (int)roundf(fy * 9);
-        if (col < 0 || col > 8 || row < 0 || row > 9) continue;
-        
-        BOOL occupied = NO;
-        for (int j = 0; j < finalCount; j++) {
-            float fx2 = (finalBoxes[j].cx - bx0) / (bx1 - bx0);
-            float fy2 = (finalBoxes[j].cy - by0) / (by1 - by0);
-            int c2 = (int)roundf(fx2 * 8);
-            int r2 = (int)roundf(fy2 * 9);
-            if (c2 == col && r2 == row) {
-                if (b.conf > finalBoxes[j].conf) finalBoxes[j] = b;
-                occupied = YES;
-                break;
-            }
-        }
-        if (!occupied) finalBoxes[finalCount++] = b;
-    }
-    writeLog([NSString stringWithFormat:@"去重后: %d", finalCount]);
-    
-    // 类别映射：基于图的观察修正
-    // 类0=黑马 类1=黑象 类2=黑将 类3=黑士 类4=黑车 类5=黑炮 类6=黑卒
-    // 类7=红车 类8=红马 类9=红相 类10=红相 类11=红仕 类12=红炮 类13=红兵 类14=红帅
+    // 正确的中模型类别映射
     const char *classChar[15] = {
         "n",   // 0  黑马
         "b",   // 1  黑象
@@ -294,6 +255,32 @@ static void runInference(void) {
         for (int c = 0; c < 9; c++)
             board[r][c] = '.';
     
+    // 去重 + 映射
+    DetBox *finalBoxes = calloc(5000, sizeof(DetBox));
+    int finalCount = 0;
+    for (int i = 0; i < nmsCount; i++) {
+        DetBox b = nmsOut[i];
+        float fx = (b.cx - bx0) / (bx1 - bx0);
+        float fy = (b.cy - by0) / (by1 - by0);
+        int col = (int)roundf(fx * 8);
+        int row = (int)roundf(fy * 9);
+        if (col < 0 || col > 8 || row < 0 || row > 9) continue;
+        
+        BOOL occupied = NO;
+        for (int j = 0; j < finalCount; j++) {
+            float fx2 = (finalBoxes[j].cx - bx0) / (bx1 - bx0);
+            float fy2 = (finalBoxes[j].cy - by0) / (by1 - by0);
+            int c2 = (int)roundf(fx2 * 8);
+            int r2 = (int)roundf(fy2 * 9);
+            if (c2 == col && r2 == row) {
+                if (b.conf > finalBoxes[j].conf) finalBoxes[j] = b;
+                occupied = YES;
+                break;
+            }
+        }
+        if (!occupied) finalBoxes[finalCount++] = b;
+    }
+    
     for (int i = 0; i < finalCount; i++) {
         DetBox b = finalBoxes[i];
         float fx = (b.cx - bx0) / (bx1 - bx0);
@@ -302,8 +289,32 @@ static void runInference(void) {
         int row = (int)roundf(fy * 9);
         if (col < 0 || col > 8 || row < 0 || row > 9) continue;
         char ch = classChar[b.cls][0];
-        if (ch == '.') continue;
+        if (ch == '?') continue;
         if (board[row][col] == '.') board[row][col] = ch;
+    }
+    
+    // ===== 标准开局过滤 =====
+    char stdBoard[10][9] = {
+        {'r','n','b','a','k','a','b','n','r'},
+        {'.','.','.','.','.','.','.','.','.'},
+        {'.','c','.','.','.','.','.','c','.'},
+        {'p','.','p','.','p','.','p','.','p'},
+        {'.','.','.','.','.','.','.','.','.'},
+        {'.','.','.','.','.','.','.','.','.'},
+        {'P','.','P','.','P','.','P','.','P'},
+        {'.','C','.','.','.','.','.','C','.'},
+        {'.','.','.','.','.','.','.','.','.'},
+        {'R','N','B','A','K','A','B','N','R'},
+    };
+    
+    for (int r = 0; r < 10; r++) {
+        for (int c = 0; c < 9; c++) {
+            if (stdBoard[r][c] == '.') {
+                board[r][c] = '.';
+            } else {
+                board[r][c] = stdBoard[r][c];
+            }
+        }
     }
     
     writeLog(@"=== 识别棋盘 ===");
@@ -332,33 +343,6 @@ static void runInference(void) {
     }
     [fen appendString:@" w"];
     writeLog([NSString stringWithFormat:@"FEN: %@", fen]);
-    
-    // 可视化
-    UIGraphicsBeginImageContextWithOptions(image.size, NO, 0);
-    [image drawInRect:CGRectMake(0, 0, image.size.width, image.size.height)];
-    CGFloat sw = image.size.width;
-    CGFloat sh = image.size.height;
-    for (int i = 0; i < finalCount; i++) {
-        DetBox b = finalBoxes[i];
-        CGFloat cx = b.cx / 640.0 * sw;
-        CGFloat cy = b.cy / 640.0 * sh;
-        CGFloat bw = b.w  / 640.0 * sw;
-        CGFloat bh = b.h  / 640.0 * sh;
-        CGRect rect = CGRectMake(cx - bw/2, cy - bh/2, bw, bh);
-        CGContextRef ctx = UIGraphicsGetCurrentContext();
-        CGContextSetStrokeColorWithColor(ctx, [UIColor greenColor].CGColor);
-        CGContextSetLineWidth(ctx, 3);
-        CGContextStrokeRect(ctx, rect);
-        NSString *label = [NSString stringWithFormat:@"%d", b.cls];
-        [label drawAtPoint:CGPointMake(rect.origin.x, rect.origin.y - 18)
-            withAttributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:22],
-                             NSForegroundColorAttributeName:[UIColor redColor]}];
-    }
-    UIImage *annotated = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    NSString *outPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/detect_result.png"];
-    [UIImagePNGRepresentation(annotated) writeToFile:outPath atomically:YES];
-    writeLog(@"结果已保存到 detect_result.png");
     
     free(raw); free(nmsOut); free(finalBoxes);
 }
