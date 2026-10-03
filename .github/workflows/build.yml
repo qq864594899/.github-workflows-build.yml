@@ -35,6 +35,25 @@ jobs:
           cp /tmp/Pikafish/src/pikafish.nnue libs/
           ls -la libs/
 
+      - name: Precompile wrapper (native macOS clang)
+        run: |
+          cd libs
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang++ -c pikafish_wrapper.cpp -o pikafish_wrapper.o \
+            -I. -std=c++17 \
+            -arch arm64 \
+            -isysroot "$SDK" \
+            -mios-version-min=15.0 \
+            -fPIC \
+            -DNDEBUG
+          ls -la pikafish_wrapper.o
+
+      - name: Copy NNUE into layout
+        run: |
+          mkdir -p layout/var/mobile/xiangqiassist
+          cp /tmp/Pikafish/src/pikafish.nnue layout/var/mobile/xiangqiassist/
+          ls -la layout/var/mobile/xiangqiassist/
+
       - name: Build Tweak
         run: |
           make package THEOS_PACKAGE_SCHEME=rootless
