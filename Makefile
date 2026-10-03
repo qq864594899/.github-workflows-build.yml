@@ -5,10 +5,8 @@ THEOS_PACKAGE_SCHEME = rootless
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = XiangqiAssist
-XiangqiAssist_FILES = Tweak.x
+XiangqiAssist_FILES = Tweak.xm
 XiangqiAssist_PLIST = XiangqiAssist.plist
 XiangqiAssist_FRAMEWORKS = UIKit CoreML
-XiangqiAssist_CFLAGS = -Ilibs -std=c++17
-XiangqiAssist_LDFLAGS = -Llibs -lpikafish -lc++
 
 include $(THEOS_MAKE_PATH)/tweak.mk
