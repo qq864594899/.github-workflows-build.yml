@@ -7,6 +7,6 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = XiangqiAssist
 XiangqiAssist_FILES = Tweak.x
 XiangqiAssist_PLIST = XiangqiAssist.plist
-XiangqiAssist_INSTALL_PATH = /Library/MobileSubstrate/DynamicLibraries
+XiangqiAssist_FRAMEWORKS = UIKit Vision CoreML
 
 include $(THEOS_MAKE_PATH)/tweak.mk
