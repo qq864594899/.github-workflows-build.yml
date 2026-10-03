@@ -1,6 +1,8 @@
 #import <UIKit/UIKit.h>
+#import <CoreML/CoreML.h>
 
-static NSInteger snapCounter = 0;
+static BOOL started = NO;
+static MLModel *gModel = nil;
 
 static void writeLog(NSString *msg) {
     NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/xiangqi_log.txt"];
@@ -26,147 +28,367 @@ static UIWindow *getAnyWindow(void) {
     return nil;
 }
 
-static UIImage *captureScreen(void) {
+static UIImage *captureScreenImpl(void) {
     UIWindow *window = getAnyWindow();
     if (!window) return nil;
     UIGraphicsBeginImageContextWithOptions(window.bounds.size, NO, 0);
-    [window drawViewHierarchyInRect:window.bounds afterScreenUpdates:YES];
+    [window drawViewHierarchyInRect:window.bounds afterScreenUpdates:NO];
     UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
     return image;
 }
 
-// ============ 切格子：9 列 × 10 行 ============
-static void sliceBoard(void) {
-    UIImage *image = captureScreen();
-    if (!image || !image.CGImage) { writeLog(@"截图失败"); return; }
+static UIImage *captureScreen(void) {
+    if ([NSThread isMainThread]) return captureScreenImpl();
+    __block UIImage *img = nil;
+    dispatch_sync(dispatch_get_main_queue(), ^{ img = captureScreenImpl(); });
+    return img;
+}
+
+static BOOL loadModel(void) {
+    NSString *docPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
+    NSString *tmpPath = [NSHomeDirectory() stringByAppendingPathComponent:@"tmp"];
+    NSString *packagePath = [docPath stringByAppendingPathComponent:@"XiangqiDetector.mlpackage"];
+    NSString *compiledPath = [docPath stringByAppendingPathComponent:@"XiangqiDetector.mlmodelc"];
+    NSURL *compiledURL = [NSURL fileURLWithPath:compiledPath];
     
-    // 保存原始截图，便于核对
-    NSString *rawPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/raw_board.png"];
-    [UIImagePNGRepresentation(image) writeToFile:rawPath atomically:YES];
+    NSError *err = nil;
     
-    CGFloat scale = image.scale;
-    CGFloat imgW = image.size.width * scale;
-    CGFloat imgH = image.size.height * scale;
-    writeLog([NSString stringWithFormat:@"截图尺寸: %.0f x %.0f", imgW, imgH]);
-    
-    // 棋盘区域（以第一颗棋子中心 48,48，最后一颗 660,715 为基准）
-    // 但注意：这个 48/48 是在 711×758 的坐标系里，需要按实际截图尺寸缩放
-    CGFloat baseX = 48.0 * (imgW / 711.0);
-    CGFloat baseY = 48.0 * (imgH / 758.0);
-    CGFloat stepX = 76.5 * (imgW / 711.0);
-    CGFloat stepY = 74.1 * (imgH / 758.0);
-    CGFloat cellSize = 80.0 * (imgW / 711.0);  // 每格裁 80 像素
-    
-    NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/cells"];
-    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-    
-    for (int r = 0; r < 10; r++) {
-        for (int c = 0; c < 9; c++) {
-            CGFloat cx = baseX + c * stepX;
-            CGFloat cy = baseY + r * stepY;
-            
-            CGRect cellRect = CGRectMake(cx - cellSize/2, cy - cellSize/2, cellSize, cellSize);
-            CGImageRef cellImg = CGImageCreateWithImageInRect(image.CGImage, cellRect);
-            if (!cellImg) continue;
-            
-            // 放大 2 倍保存
-            CGFloat nw = cellSize * 2;
-            CGFloat nh = cellSize * 2;
-            UIGraphicsBeginImageContextWithOptions(CGSizeMake(nw, nh), NO, 1.0);
-            [[UIImage imageWithCGImage:cellImg] drawInRect:CGRectMake(0, 0, nw, nh)];
-            UIImage *big = UIGraphicsGetImageFromCurrentImageContext();
-            UIGraphicsEndImageContext();
-            CGImageRelease(cellImg);
-            
-            NSString *name = [NSString stringWithFormat:@"r%02d_c%02d.png", r, c];
-            NSString *path = [dir stringByAppendingPathComponent:name];
-            [UIImagePNGRepresentation(big) writeToFile:path atomically:YES];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:compiledPath]) {
+        writeLog(@"首次加载，准备编译模型...");
+        if (![[NSFileManager defaultManager] fileExistsAtPath:packagePath]) {
+            writeLog(@"mlpackage 不存在！");
+            return NO;
         }
+        NSString *tmpPackagePath = [tmpPath stringByAppendingPathComponent:@"XiangqiDetector.mlpackage"];
+        [[NSFileManager defaultManager] removeItemAtPath:tmpPackagePath error:nil];
+        if (![[NSFileManager defaultManager] copyItemAtPath:packagePath toPath:tmpPackagePath error:&err]) {
+            writeLog([NSString stringWithFormat:@"拷贝到 tmp 失败: %@", err.localizedDescription]);
+            return NO;
+        }
+        NSURL *tmpPackageURL = [NSURL fileURLWithPath:tmpPackagePath];
+        NSURL *compiled = [MLModel compileModelAtURL:tmpPackageURL error:&err];
+        if (err || !compiled) {
+            writeLog([NSString stringWithFormat:@"编译失败: %@", err.localizedDescription]);
+            return NO;
+        }
+        [[NSFileManager defaultManager] removeItemAtURL:compiledURL error:nil];
+        if (![[NSFileManager defaultManager] moveItemAtURL:compiled toURL:compiledURL error:&err]) {
+            writeLog([NSString stringWithFormat:@"移动失败: %@", err.localizedDescription]);
+            return NO;
+        }
+        [[NSFileManager defaultManager] removeItemAtPath:tmpPackagePath error:nil];
+        writeLog(@"编译完成");
     }
     
-    snapCounter++;
-    writeLog([NSString stringWithFormat:@"切格子完成 #%ld，目录: Documents/cells/", (long)snapCounter]);
+    MLModelConfiguration *cfg = [[MLModelConfiguration alloc] init];
+    cfg.computeUnits = MLComputeUnitsCPUOnly;
+    
+    MLModel *m = [MLModel modelWithContentsOfURL:compiledURL configuration:cfg error:&err];
+    if (err || !m) {
+        writeLog([NSString stringWithFormat:@"模型加载失败: %@", err.localizedDescription]);
+        return NO;
+    }
+    gModel = m;
+    writeLog(@"模型加载成功");
+    return YES;
 }
-// ============================================
 
-// ---- 悬浮窗 + 按钮 ----
+static MLMultiArray *imageToMultiArray(UIImage *image, int width, int height) {
+    NSError *err = nil;
+    MLMultiArray *arr = [[MLMultiArray alloc] initWithShape:@[@1, @3, @(height), @(width)]
+                                                   dataType:MLMultiArrayDataTypeFloat32
+                                                      error:&err];
+    if (err || !arr) return nil;
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    uint8_t *raw = (uint8_t *)calloc(width * height * 4, 1);
+    CGContextRef ctx = CGBitmapContextCreate(raw, width, height, 8, width * 4, cs, kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(cs);
+    if (!ctx) { free(raw); return nil; }
+    CGContextDrawImage(ctx, CGRectMake(0, 0, width, height), image.CGImage);
+    float *dst = (float *)arr.dataPointer;
+    int planeSize = width * height;
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int srcIdx = (y * width + x) * 4;
+            int dstIdx = y * width + x;
+            dst[0 * planeSize + dstIdx] = raw[srcIdx + 0] / 255.0f;
+            dst[1 * planeSize + dstIdx] = raw[srcIdx + 1] / 255.0f;
+            dst[2 * planeSize + dstIdx] = raw[srcIdx + 2] / 255.0f;
+        }
+    }
+    CGContextRelease(ctx);
+    free(raw);
+    return arr;
+}
+
+typedef struct {
+    float cx, cy, w, h;
+    float conf;
+    int cls;
+} DetBox;
+
+static void parseYOLO(MLMultiArray *out, float confThresh, DetBox *results, int *count, int maxCount) {
+    float *data = (float *)out.dataPointer;
+    int N = 25200;
+    int C = 20;
+    *count = 0;
+    for (int i = 0; i < N; i++) {
+        float *row = data + i * C;
+        float conf = row[4];
+        if (conf < confThresh) continue;
+        int bestCls = 0;
+        float bestScore = row[5];
+        for (int c = 1; c < 15; c++) {
+            if (row[5 + c] > bestScore) { bestScore = row[5 + c]; bestCls = c; }
+        }
+        if (bestScore < confThresh) continue;
+        if (*count >= maxCount) break;
+        DetBox b;
+        b.cx = row[0]; b.cy = row[1]; b.w = row[2]; b.h = row[3];
+        b.conf = conf; b.cls = bestCls;
+        results[*count] = b;
+        (*count)++;
+    }
+}
+
+static float iou(DetBox a, DetBox b) {
+    float ax1 = a.cx - a.w/2, ay1 = a.cy - a.h/2;
+    float ax2 = a.cx + a.w/2, ay2 = a.cy + a.h/2;
+    float bx1 = b.cx - b.w/2, by1 = b.cy - b.h/2;
+    float bx2 = b.cx + b.w/2, by2 = b.cy + b.h/2;
+    float ix1 = fmaxf(ax1, bx1), iy1 = fmaxf(ay1, by1);
+    float ix2 = fminf(ax2, bx2), iy2 = fminf(ay2, by2);
+    float iw = fmaxf(0, ix2 - ix1), ih = fmaxf(0, iy2 - iy1);
+    float inter = iw * ih;
+    float uni = a.w * a.h + b.w * b.h - inter;
+    if (uni <= 0) return 0;
+    return inter / uni;
+}
+
+static int nms(DetBox *boxes, int count, float iouThresh, DetBox *out) {
+    int *used = calloc(count, sizeof(int));
+    int outCount = 0;
+    while (1) {
+        int best = -1;
+        float bestConf = -1;
+        for (int i = 0; i < count; i++) {
+            if (used[i]) continue;
+            if (boxes[i].conf > bestConf) { bestConf = boxes[i].conf; best = i; }
+        }
+        if (best < 0) break;
+        used[best] = 1;
+        out[outCount++] = boxes[best];
+        for (int i = 0; i < count; i++) {
+            if (used[i]) continue;
+            if (boxes[i].cls != boxes[best].cls) continue;
+            if (iou(boxes[i], boxes[best]) > iouThresh) used[i] = 1;
+        }
+    }
+    free(used);
+    return outCount;
+}
+
+static void runInference(void) {
+    writeLog(@"=== 开始推理 ===");
+    if (!loadModel()) return;
+    if (!gModel) { writeLog(@"gModel 为空"); return; }
+    
+    UIImage *image = captureScreen();
+    if (!image) { writeLog(@"截图失败"); return; }
+    writeLog(@"截图完成");
+    
+    int W = 640, H = 640;
+    UIGraphicsBeginImageContextWithOptions(CGSizeMake(W, H), NO, 1.0);
+    [image drawInRect:CGRectMake(0, 0, W, H)];
+    UIImage *resized = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    
+    MLMultiArray *input = imageToMultiArray(resized, W, H);
+    if (!input) { writeLog(@"输入构造失败"); return; }
+    
+    NSError *err = nil;
+    NSString *inputName = gModel.modelDescription.inputDescriptionsByName.allKeys.firstObject;
+    MLDictionaryFeatureProvider *provider = [[MLDictionaryFeatureProvider alloc]
+        initWithDictionary:@{inputName: input} error:&err];
+    if (err || !provider) { writeLog(@"provider 失败"); return; }
+    
+    id<MLFeatureProvider> output = [gModel predictionFromFeatures:provider error:&err];
+    if (err || !output) { writeLog(@"推理失败"); return; }
+    
+    MLFeatureValue *v = [output featureValueForName:output.featureNames.allObjects.firstObject];
+    MLMultiArray *outArr = v.multiArrayValue;
+    
+    // 用 0.3 的置信度阈值
+    DetBox *raw = calloc(5000, sizeof(DetBox));
+    int rawCount = 0;
+    parseYOLO(outArr, 0.3, raw, &rawCount, 5000);
+    
+    // IoU 阈值提高到 0.6
+    DetBox *nmsOut = calloc(5000, sizeof(DetBox));
+    int nmsCount = nms(raw, rawCount, 0.6, nmsOut);
+    writeLog([NSString stringWithFormat:@"NMS 后: %d", nmsCount]);
+    
+    // ===== 坐标映射 =====
+    float bx0 = 37,  bx1 = 600;
+    float by0 = 179, by1 = 459;
+    
+    // 去重：同一格子附近保留置信度最高的
+    DetBox *finalBoxes = calloc(5000, sizeof(DetBox));
+    int finalCount = 0;
+    for (int i = 0; i < nmsCount; i++) {
+        DetBox b = nmsOut[i];
+        float fx = (b.cx - bx0) / (bx1 - bx0);
+        float fy = (b.cy - by0) / (by1 - by0);
+        int col = (int)roundf(fx * 8);
+        int row = (int)roundf(fy * 9);
+        if (col < 0 || col > 8 || row < 0 || row > 9) continue;
+        
+        BOOL occupied = NO;
+        for (int j = 0; j < finalCount; j++) {
+            float fx2 = (finalBoxes[j].cx - bx0) / (bx1 - bx0);
+            float fy2 = (finalBoxes[j].cy - by0) / (by1 - by0);
+            int c2 = (int)roundf(fx2 * 8);
+            int r2 = (int)roundf(fy2 * 9);
+            if (c2 == col && r2 == row) {
+                if (b.conf > finalBoxes[j].conf) finalBoxes[j] = b;
+                occupied = YES;
+                break;
+            }
+        }
+        if (!occupied) finalBoxes[finalCount++] = b;
+    }
+    writeLog([NSString stringWithFormat:@"去重后: %d", finalCount]);
+    
+    // 类别映射（中模型 15 类，标准顺序）
+    // 0=黑车 1=黑马 2=黑象 3=黑士 4=黑将 5=黑炮 6=黑卒
+    // 7=红车 8=红马 9=红相 10=红仕 11=红帅 12=红炮 13=红兵 14=空
+    const char *classChar[15] = {
+        "r", "n", "b", "a", "k", "c", "p",
+        "R", "N", "B", "A", "K", "C", "P", "."
+    };
+    
+    char board[10][9];
+    for (int r = 0; r < 10; r++)
+        for (int c = 0; c < 9; c++)
+            board[r][c] = '.';
+    
+    for (int i = 0; i < finalCount; i++) {
+        DetBox b = finalBoxes[i];
+        float fx = (b.cx - bx0) / (bx1 - bx0);
+        float fy = (b.cy - by0) / (by1 - by0);
+        int col = (int)roundf(fx * 8);
+        int row = (int)roundf(fy * 9);
+        if (col < 0 || col > 8 || row < 0 || row > 9) continue;
+        char ch = classChar[b.cls][0];
+        if (ch == '.') continue;
+        if (board[row][col] == '.') board[row][col] = ch;
+    }
+    
+    writeLog(@"=== 识别棋盘 ===");
+    writeLog(@"   0 1 2 3 4 5 6 7 8");
+    for (int r = 0; r < 10; r++) {
+        NSMutableString *line = [NSMutableString stringWithFormat:@"%2d ", r];
+        for (int c = 0; c < 9; c++) {
+            [line appendFormat:@"%c ", board[r][c]];
+        }
+        writeLog(line);
+    }
+    
+    NSMutableString *fen = [NSMutableString string];
+    for (int r = 0; r < 10; r++) {
+        int empty = 0;
+        for (int c = 0; c < 9; c++) {
+            if (board[r][c] == '.') {
+                empty++;
+            } else {
+                if (empty > 0) { [fen appendFormat:@"%d", empty]; empty = 0; }
+                [fen appendFormat:@"%c", board[r][c]];
+            }
+        }
+        if (empty > 0) [fen appendFormat:@"%d", empty];
+        if (r < 9) [fen appendString:@"/"];
+    }
+    [fen appendString:@" w"];
+    writeLog([NSString stringWithFormat:@"FEN: %@", fen]);
+    
+    // 可视化
+    UIGraphicsBeginImageContextWithOptions(image.size, NO, 0);
+    [image drawInRect:CGRectMake(0, 0, image.size.width, image.size.height)];
+    CGFloat sw = image.size.width;
+    CGFloat sh = image.size.height;
+    for (int i = 0; i < finalCount; i++) {
+        DetBox b = finalBoxes[i];
+        CGFloat cx = b.cx / 640.0 * sw;
+        CGFloat cy = b.cy / 640.0 * sh;
+        CGFloat bw = b.w  / 640.0 * sw;
+        CGFloat bh = b.h  / 640.0 * sh;
+        CGRect rect = CGRectMake(cx - bw/2, cy - bh/2, bw, bh);
+        CGContextRef ctx = UIGraphicsGetCurrentContext();
+        CGContextSetStrokeColorWithColor(ctx, [UIColor greenColor].CGColor);
+        CGContextSetLineWidth(ctx, 3);
+        CGContextStrokeRect(ctx, rect);
+        NSString *label = [NSString stringWithFormat:@"%d", b.cls];
+        [label drawAtPoint:CGPointMake(rect.origin.x, rect.origin.y - 18)
+            withAttributes:@{NSFontAttributeName:[UIFont boldSystemFontOfSize:22],
+                             NSForegroundColorAttributeName:[UIColor redColor]}];
+    }
+    UIImage *annotated = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    NSString *outPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/detect_result.png"];
+    [UIImagePNGRepresentation(annotated) writeToFile:outPath atomically:YES];
+    writeLog(@"结果已保存到 detect_result.png");
+    
+    free(raw); free(nmsOut); free(finalBoxes);
+}
+
 static UIView *panel = nil;
-static UILabel *infoLabel = nil;
-static UIButton *sliceBtn = nil;
 
-@interface SliceController : NSObject
-- (void)onSlice:(UIButton *)sender;
-- (void)handlePan:(UIPanGestureRecognizer *)gesture;
+@interface XQController : NSObject
+- (void)onDetect:(UIButton *)sender;
 @end
 
-@implementation SliceController
-- (void)onSlice:(UIButton *)sender {
-    [sender setTitle:@"切格子中..." forState:UIControlStateNormal];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        sliceBoard();
-        [sender setTitle:@"✅ 切格子完成" forState:UIControlStateNormal];
-        infoLabel.text = @"已存到 Documents/cells/";
+@implementation XQController
+- (void)onDetect:(UIButton *)sender {
+    [sender setTitle:@"识别中..." forState:UIControlStateNormal];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        runInference();
+        [sender setTitle:@"识别" forState:UIControlStateNormal];
     });
 }
-- (void)handlePan:(UIPanGestureRecognizer *)gesture {
-    CGPoint t = [gesture translationInView:gesture.view.superview];
-    gesture.view.center = CGPointMake(gesture.view.center.x + t.x, gesture.view.center.y + t.y);
-    [gesture setTranslation:CGPointZero inView:gesture.view.superview];
-}
 @end
 
-static SliceController *sliceCtl = nil;
+static XQController *ctl = nil;
 
 static void createPanel(void) {
     if (panel) return;
-    if (!sliceCtl) sliceCtl = [[SliceController alloc] init];
-    
+    if (!ctl) ctl = [[XQController alloc] init];
     UIWindow *window = getAnyWindow();
     if (!window) return;
-    
-    CGFloat w = 280, h = 140;
-    CGFloat x = window.bounds.size.width - w - 10;
-    CGFloat y = 120;
-    
-    panel = [[UIView alloc] initWithFrame:CGRectMake(x, y, w, h)];
+    panel = [[UIView alloc] initWithFrame:CGRectMake(window.bounds.size.width - 200, 120, 180, 90)];
     panel.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.85];
-    panel.layer.cornerRadius = 12;
-    
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(10, 8, w - 20, 22)];
-    title.text = @"XiangqiAssist - 切格子";
-    title.textColor = [UIColor whiteColor];
-    title.font = [UIFont boldSystemFontOfSize:14];
-    [panel addSubview:title];
-    
-    sliceBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    sliceBtn.frame = CGRectMake(10, 36, w - 20, 40);
-    [sliceBtn setTitle:@"切格子" forState:UIControlStateNormal];
-    [sliceBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    sliceBtn.backgroundColor = [UIColor systemBlueColor];
-    sliceBtn.layer.cornerRadius = 8;
-    [sliceBtn addTarget:sliceCtl action:@selector(onSlice:) forControlEvents:UIControlEventTouchUpInside];
-    [panel addSubview:sliceBtn];
-    
-    infoLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 84, w - 20, 40)];
-    infoLabel.text = @"先切到 2D 视角再点按钮";
-    infoLabel.textColor = [UIColor whiteColor];
-    infoLabel.font = [UIFont systemFontOfSize:11];
-    infoLabel.numberOfLines = 0;
-    [panel addSubview:infoLabel];
-    
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:sliceCtl action:@selector(handlePan:)];
-    [panel addGestureRecognizer:pan];
-    
+    panel.layer.cornerRadius = 10;
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
+    btn.frame = CGRectMake(10, 10, 160, 40);
+    [btn setTitle:@"识别" forState:UIControlStateNormal];
+    [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    btn.backgroundColor = [UIColor systemBlueColor];
+    btn.layer.cornerRadius = 8;
+    [btn addTarget:ctl action:@selector(onDetect:) forControlEvents:UIControlEventTouchUpInside];
+    [panel addSubview:btn];
+    UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(10, 55, 160, 30)];
+    tip.text = @"结果写日志";
+    tip.textColor = [UIColor whiteColor];
+    tip.font = [UIFont systemFontOfSize:11];
+    [panel addSubview:tip];
     [window addSubview:panel];
 }
 
 %hook UIViewController
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    static BOOL created = NO;
-    if (created) return;
-    created = YES;
+    if (started) return;
+    started = YES;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         createPanel();
     });
