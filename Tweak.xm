@@ -219,22 +219,28 @@ static void runInference(void) {
     MLFeatureValue *v = [output featureValueForName:output.featureNames.allObjects.firstObject];
     MLMultiArray *outArr = v.multiArrayValue;
     
-    // 用 0.3 的置信度阈值
-    
     DetBox *raw = (DetBox *)calloc(5000, sizeof(DetBox));
     int rawCount = 0;
     parseYOLO(outArr, 0.3, raw, &rawCount, 5000);
     
-    // IoU 阈值提高到 0.6
     DetBox *nmsOut = (DetBox *)calloc(5000, sizeof(DetBox));
     int nmsCount = nms(raw, rawCount, 0.6, nmsOut);
     writeLog([NSString stringWithFormat:@"NMS 后: %d", nmsCount]);
     
+    // ===== 按类别分组打印（新增，用于确定映射）=====
+    for (int c = 0; c < 15; c++) {
+        NSMutableString *line = [NSMutableString stringWithFormat:@"类%d: ", c];
+        for (int i = 0; i < nmsCount; i++) {
+            if (nmsOut[i].cls == c) {
+                [line appendFormat:@"(%.0f,%.0f) ", nmsOut[i].cx, nmsOut[i].cy];
+            }
+        }
+        writeLog(line);
+    }
+    
     // ===== 坐标映射 =====
     float bx0 = 37,  bx1 = 600;
     float by0 = 179, by1 = 459;
-    
-    // 去重：同一格子附近保留置信度最高的
     
     DetBox *finalBoxes = (DetBox *)calloc(5000, sizeof(DetBox));
     int finalCount = 0;
@@ -262,12 +268,12 @@ static void runInference(void) {
     }
     writeLog([NSString stringWithFormat:@"去重后: %d", finalCount]);
     
-    // 类别映射（中模型 15 类，标准顺序）
-    // 0=黑车 1=黑马 2=黑象 3=黑士 4=黑将 5=黑炮 6=黑卒
-    // 7=红车 8=红马 9=红相 10=红仕 11=红帅 12=红炮 13=红兵 14=空
+    // 类别映射：基于图的观察修正
+    // 类0=黑马 类1=黑象 类2=黑将 类3=黑士 类4=黑车 类5=黑炮 类6=黑卒
+    // 类7=红车 类8=红马 类9=红相 类10=红相 类11=红仕 类12=红炮 类13=红兵 类14=红帅
     const char *classChar[15] = {
         "n", "b", "k", "a", "r", "c", "p",
-        "R", "N", "B", "A", "K", "C", "P", "?"
+        "R", "N", "B", "B", "A", "C", "P", "K"
     };
     
     char board[10][9];
