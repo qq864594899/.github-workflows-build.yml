@@ -396,4 +396,8 @@ static void createPanel(void) {
         createPanel();
     });
 }
+    // 调用皮卡鱼引擎
+    extern const char* pf_bestmove(const char* fen, int movetime_ms);
+    const char *bm = pf_bestmove([fen UTF8String], 1000);
+    writeLog([NSString stringWithFormat:@"引擎建议: %s", bm]);
 %end
