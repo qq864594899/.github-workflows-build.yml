@@ -167,7 +167,7 @@ static float iou(DetBox a, DetBox b) {
 }
 
 static int nms(DetBox *boxes, int count, float iouThresh, DetBox *out) {
-    int *used = calloc(count, sizeof(int));
+    int *used = (int *)calloc(count, sizeof(int));
     int outCount = 0;
     while (1) {
         int best = -1;
@@ -220,12 +220,13 @@ static void runInference(void) {
     MLMultiArray *outArr = v.multiArrayValue;
     
     // 用 0.3 的置信度阈值
-    DetBox *raw = calloc(5000, sizeof(DetBox));
+    
+    DetBox *raw = (DetBox *)calloc(5000, sizeof(DetBox));
     int rawCount = 0;
     parseYOLO(outArr, 0.3, raw, &rawCount, 5000);
     
     // IoU 阈值提高到 0.6
-    DetBox *nmsOut = calloc(5000, sizeof(DetBox));
+    DetBox *nmsOut = (DetBox *)calloc(5000, sizeof(DetBox));
     int nmsCount = nms(raw, rawCount, 0.6, nmsOut);
     writeLog([NSString stringWithFormat:@"NMS 后: %d", nmsCount]);
     
@@ -234,7 +235,8 @@ static void runInference(void) {
     float by0 = 179, by1 = 459;
     
     // 去重：同一格子附近保留置信度最高的
-    DetBox *finalBoxes = calloc(5000, sizeof(DetBox));
+    
+    DetBox *finalBoxes = (DetBox *)calloc(5000, sizeof(DetBox));
     int finalCount = 0;
     for (int i = 0; i < nmsCount; i++) {
         DetBox b = nmsOut[i];
