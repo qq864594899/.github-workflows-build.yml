@@ -20,15 +20,10 @@ jobs:
           cd /tmp/Pikafish/src
           curl -L -o pikafish.nnue https://github.com/official-pikafish/Pikafish/raw/master/src/pikafish.nnue
 
-      - name: Patch Makefile for clang
-        run: |
-          cd /tmp/Pikafish/src
-          sed -i.bak 's/g++/clang++/g' Makefile
-
       - name: Build Pikafish static lib
         run: |
           cd /tmp/Pikafish/src
-          make -j4 build ARCH=apple-silicon COMP=clang
+          make -j4 build ARCH=apple-silicon
           ar rcs libpikafish.a *.o
           ls -la libpikafish.a
 
