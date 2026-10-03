@@ -1,6 +1,8 @@
 #import <UIKit/UIKit.h>
 #import <CoreML/CoreML.h>
 
+extern "C" const char* pf_bestmove(const char* fen, int movetime_ms);
+
 static BOOL started = NO;
 static MLModel *gModel = nil;
 
@@ -227,26 +229,12 @@ static void runInference(void) {
     int nmsCount = nms(raw, rawCount, 0.6, nmsOut);
     writeLog([NSString stringWithFormat:@"NMS 后: %d", nmsCount]);
     
-    // ===== 坐标映射 =====
     float bx0 = 37,  bx1 = 600;
     float by0 = 179, by1 = 459;
     
     const char *classChar[15] = {
-        "n",   // 0  黑马
-        "b",   // 1  黑象
-        "k",   // 2  黑将
-        "a",   // 3  黑士
-        "r",   // 4  黑车
-        "c",   // 5  黑炮
-        "p",   // 6  黑卒
-        "R",   // 7  红车
-        "N",   // 8  红马
-        "B",   // 9  红相
-        "K",   // 10 红帅
-        "A",   // 11 红仕
-        "C",   // 12 红炮
-        "P",   // 13 红兵
-        "?"    // 14 空
+        "n", "b", "k", "a", "r", "c", "p",
+        "R", "N", "B", "K", "A", "C", "P", "?"
     };
     
     char board[10][9];
@@ -291,7 +279,6 @@ static void runInference(void) {
         if (board[row][col] == '.') board[row][col] = ch;
     }
     
-    // ===== 标准开局过滤 =====
     char stdBoard[10][9] = {
         {'r','n','b','a','k','a','b','n','r'},
         {'.','.','.','.','.','.','.','.','.'},
@@ -341,6 +328,10 @@ static void runInference(void) {
     }
     [fen appendString:@" w"];
     writeLog([NSString stringWithFormat:@"FEN: %@", fen]);
+    
+    // ===== 调用皮卡鱼引擎 =====
+    const char *bm = pf_bestmove([fen UTF8String], 1000);
+    writeLog([NSString stringWithFormat:@"引擎建议: %s", bm]);
     
     free(raw); free(nmsOut); free(finalBoxes);
 }
@@ -396,8 +387,4 @@ static void createPanel(void) {
         createPanel();
     });
 }
-    // 调用皮卡鱼引擎
-    extern const char* pf_bestmove(const char* fen, int movetime_ms);
-    const char *bm = pf_bestmove([fen UTF8String], 1000);
-    writeLog([NSString stringWithFormat:@"引擎建议: %s", bm]);
 %end
